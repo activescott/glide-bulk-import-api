@@ -2,6 +2,9 @@ from typing import Dict, Any, Iterator, List
 import logging
 import requests
 import os
+import argparse
+import json
+import uuid
 
 LOG_LEVEL_DEFAULT = logging.INFO
 logger = logging.getLogger(__name__)
@@ -19,7 +22,6 @@ ALLOWED_COLUMN_TYPES = [
     "dateTime",
     "json",
 ]
-
 
 class TableColumn(dict):
     """
@@ -39,14 +41,38 @@ class TableColumn(dict):
     def type(self) -> str:
         # NOTE: we serialize this as {kind: "<typename>"} per the rest API's serialization
         return self['type']['kind']
+    
+    def json(self) -> str:
+        return json.dumps(self)
+
+    def __repr__(self):
+        return self.json()
 
     def __eq__(self, other):
         if not isinstance(other, TableColumn):
             return False
         return dict(self) == dict(other)
 
+class Table(dict):
+    def __init__(self, id: str, name: str):
+        dict.__init__(self, id=id, name=name)
+
+    def id(self) -> str:
+        return self['id']
+
+    def name(self) -> str:
+        return self['name']
+
+    def __eq__(self, other):
+        if not isinstance(other, Table):
+            return False
+        return dict(self) == dict(other)
+
+    def json(self) -> str:
+        return json.dumps(self)
+
     def __repr__(self):
-        return f"Column(id='{self.id()}', type='{self.type()}')"
+        return self.json()
 
 
 class GlideApi:
@@ -77,22 +103,12 @@ class GlideApi:
     def stash_rows(self, rows: List[TableRow]) -> None:
         # if we haven't started a stash, create one:
         if self.stash_id is None:
-            r = requests.post(
-                self.url(f"stashes"),
-                headers=self.headers(),
-            )
-            try:
-                r.raise_for_status()
-            except Exception as e:
-                raise Exception(f"failed to create stash. Response was '{r.text}'") from e # nopep8
-
-            result = r.json()
-            self.stash_id = result["data"]["stashID"]
+            self.stash_id = uuid.uuid4().hex
             self.stash_serial = 0
             logger.info(f"Created new stash for records with id '{self.stash_id}'") # nopep8
 
         logger.debug(f"adding {len(rows)} rows to stash {self.stash_id} as batch {self.stash_serial}...") # nopep8
-        r = requests.post(
+        r = requests.put(
             self.url(f"stashes/{self.stash_id}/{self.stash_serial}"),
             headers=self.headers(),
             json=rows
@@ -162,3 +178,66 @@ class GlideApi:
 
         logger.info(f"overwriting table '{table_id}' succeeded.")
         self._reset_stash()
+
+    def list_tables(self) -> Iterator[Table]:
+        r = requests.get(
+            self.url(f"tables"),
+            headers=self.headers()
+        )
+        try:
+            r.raise_for_status()
+        except Exception as e:
+            raise Exception(f"failed to list tables. Response was '{r.text}'") from e
+
+        result = r.json()
+        for table in result["data"]:
+            yield Table(table["id"], table["name"])
+    
+    def get_table(self, table_id: str) -> Table:
+        raise NotImplementedError("get_table not implemented yet. Please implement this method when the `GET /tables/{id}` method is implemented at https://apidocs.glideapps.com.")  # nopep8
+        r = requests.get(
+            self.url(f"tables/{table_id}"),
+            headers=self.headers()
+        )
+        try:
+            r.raise_for_status()
+        except Exception as e:
+            raise Exception(f"failed to get table '{table_id}'. Response was '{r.text}'") from e
+
+        result = r.json()
+        return Table(result["data"]["id"], result["data"]["name"])
+
+
+def handle_tables_command():
+    glide = GlideApi()
+    tables = glide.list_tables()
+    for table in tables:
+        print(table.json())
+
+def handle_table_command(table_id):
+    glide = GlideApi()
+    table_details = glide.get_table(table_id)
+    print(table_details)
+
+def main():
+    parser = argparse.ArgumentParser(description="Glide CLI")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Subparser for the "tables" command
+    subparsers.add_parser("tables", help="List all tables")
+
+    # Subparser for the "table" command
+    table_parser = subparsers.add_parser("table", help="Get details of a specific table")
+    table_parser.add_argument("table_id", type=str, help="The ID of the table")
+
+    args = parser.parse_args()
+
+    if args.command == "tables":
+        handle_tables_command()
+    elif args.command == "table":
+        handle_table_command(args.table_id)
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()
