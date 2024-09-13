@@ -85,8 +85,20 @@ class GlideApi:
 
         self.api_token = api_token if not api_token == None else os.getenv(
             'GLIDE_TOKEN')
+        
         if self.api_token is None:
-            raise Exception("Please set the GLIDE_TOKEN environment variable")
+            secrets_file = os.path.join(os.path.dirname(__file__), '.env.secrets')
+            if os.path.isfile(secrets_file):
+                logger.debug("Reading API token from .env.secrets file...")
+                with open(secrets_file, 'r') as f:
+                    for line in f:
+                        if line.startswith('GLIDE_TOKEN='):
+                            logger.debug("Found API token from .env.secrets file.")
+                            self.api_token = line.strip().split('=')[1]
+                            break
+        
+        if self.api_token is None:
+            raise Exception("Please set the GLIDE_TOKEN environment variable or provide it in the .env.secrets file")
 
         self._reset_stash()
 
